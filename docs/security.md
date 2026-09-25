@@ -22,7 +22,7 @@
 
 ## Responsible AI
 
-- The first reply to every new customer says it's an AI assistant and how to reach a person.
+- A new customer's first order confirmation or assistant reply says it's an AI assistant and how to reach a person.
 - **human** always reaches the owner; complaints, drink problems and refunds are handed off, not handled by the AI.
 - The bot never states facts that aren't in settings; missing facts trigger a hand-off.
 - No marketing messages are sent. Reminders go only to a customer's own unpaid order, once, inside their 24-hour window. **STOP** is honoured.

@@ -56,7 +56,7 @@ npm run test:e2e    # 15 scenarios through gate → n8n 2.40.7 → Postgres, Met
 
 ## Deploy
 
-[docs/setup.md](docs/setup.md): Oracle VM → secrets → `./scripts/bootstrap.sh` → Meta app (test number first) → templates → settings → go live with 055 886 6617. Operations: [docs/runbook.md](docs/runbook.md).
+[docs/setup.md](docs/setup.md): Oracle VM → Meta app (test number first) → secrets + `./scripts/bootstrap.sh` → webhook → settings → templates → test → go live with 055 886 6617. Operations: [docs/runbook.md](docs/runbook.md).
 
 ## Decisions
 
