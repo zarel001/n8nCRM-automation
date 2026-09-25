@@ -2,7 +2,7 @@
 
 About 2 hours end to end, plus Meta's review time for templates and business verification.
 
-> **Deadline:** if the business already has a WhatsApp API account, add a payment method in WhatsApp Manager → Billing **before 30 Sept 2026**. From 1 Oct 2026 Meta stops delivering replies for accounts without one.
+> **For now the bot runs on Meta's free test number.** Only the phones you verify in step 3 can chat with it, and 055 886 6617 stays in the WhatsApp Business app, untouched. The test number needs no payment method. Going live on a real number is [step 9](#9-later-go-live-on-a-real-number), whenever you're ready.
 
 ## 1. Oracle Cloud VM
 
@@ -31,7 +31,6 @@ Meta needs HTTPS with a real certificate; Caddy gets one from Let's Encrypt auto
 3. *WhatsApp → API Setup*: add test recipients: **the owner's personal number** and **a different phone for playing the customer** (the owner's number is treated as the owner, so orders from it won't work). A test number can message at most 5 verified numbers. Note the **Phone number ID** and the **WhatsApp Business Account ID**.
 4. **Permanent token**: Business settings → Users → *System users* → Add (Admin) → *Assign assets*: the app and the WhatsApp account (full control) → *Generate token* with `whatsapp_business_messaging` + `whatsapp_business_management`, expiry **Never**.
 5. App settings → Basic → **App secret**.
-6. WhatsApp Manager → **Billing**: add a payment method.
 
 ## 4. Secrets and first start
 
@@ -68,8 +67,8 @@ docker compose -f infra/docker-compose.yml exec postgres psql -U postgres -d mas
 ```sql
 set role mashsip_admin;
 select crm.put_setting('{"key":"owner","value":{"wa_id":"233XXXXXXXXX","name":"<owner first name>"}}');   -- owner's PERSONAL number
-select crm.put_setting('{"key":"momo","value":{"number":"055 886 6617","name":"Mash & Sip Co.","network":"MTN MoMo"}}');
-select crm.put_setting('{"key":"whatsapp","value":{"graph_base_url":"https://graph.facebook.com","graph_version":"v26.0","phone_number_id":"<PHONE_NUMBER_ID>","template_language":"en"}}');
+select crm.put_setting('{"key":"momo","value":{"number":"<MoMo number>","name":"Mash & Sip Co.","network":"MTN MoMo"}}');
+select crm.put_setting('{"key":"whatsapp","value":{"graph_base_url":"https://graph.facebook.com","graph_version":"v26.0","phone_number_id":"<PHONE_NUMBER_ID>","template_language":"en"}}');   -- the test number's ID (step 3)
 select crm.put_setting('{"key":"business","value":{
   "hours":"Mon–Sat, 8am–7pm", "delivery_areas":"…", "delivery_fee":"…", "delivery_time":"…",
   "storage":"Keep refrigerated", "shelf_life":"…", "pickup":null,
@@ -95,7 +94,7 @@ Approval usually takes minutes to hours. Until then, alerts reach the owner only
 
 ## 8. Test on the test number
 
-The site links to the real number, so from the "customer" phone send the checkout text to the **test number** yourself:
+The site still links to 055 886 6617 (the WhatsApp Business app), so from the "customer" phone send the checkout text to the **test number** yourself:
 
 ```
 Order: Cinnamon 250ml x2
@@ -110,15 +109,18 @@ Walk through:
 - [ ] "human" → *Take over chat* → messages relay both ways → `/done`.
 - [ ] "STOP" / "START", a voice note, "cancel".
 
-## 9. Go live with 055 886 6617
+## 9. Later: go live on a real number
 
-Not using coexistence means the number leaves the WhatsApp Business app for good.
+Do this only when you're ready to launch. Until then, customers keep ordering through 055 886 6617 in the WhatsApp Business app, as they do today.
 
-1. Business verification approved, payment method set, templates approved.
-2. On the phone that has 055 886 6617: export any chats worth keeping; they don't move to the API.
-3. WhatsApp Business app → Settings → Account → **Delete account** for that number.
-4. WhatsApp Manager → Phone numbers → **Add phone number** → 055 886 6617, display name "Mash & Sip Co." → verify by SMS or voice → set a two-step PIN (store it).
-5. Update `whatsapp.phone_number_id` (step 6) with the new number's ID; repeat step 5.2 if needed.
-6. Place a real order from the site. The site already links to 233558866617, so the storefront needs no change.
+Moving 055 886 6617 to the API takes it out of the WhatsApp Business app for good (no coexistence).
+
+1. Business verification approved, templates approved.
+2. WhatsApp Manager → **Billing**: add a payment method. From 1 Oct 2026, Meta stops delivering replies for accounts without one.
+3. On the phone that has 055 886 6617: export any chats worth keeping; they don't move to the API.
+4. WhatsApp Business app → Settings → Account → **Delete account** for that number.
+5. WhatsApp Manager → Phone numbers → **Add phone number** → 055 886 6617, display name "Mash & Sip Co." → verify by SMS or voice → set a two-step PIN (store it).
+6. Update `whatsapp.phone_number_id` (step 6) with the new number's ID; repeat step 5.2 if needed.
+7. Place a real order from the site. The site already links to 233558866617, so the storefront needs no change.
 
 Before launch, also: add a privacy notice to the site (orders, chats and payment screenshots are processed by this bot, with Anthropic as a processor), and check the business's registration with Ghana's Data Protection Commission (Data Protection Act, 2012).
