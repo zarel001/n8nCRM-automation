@@ -1,0 +1,93 @@
+{
+  "language": "en",
+  "templates": [
+    {
+      "name": "payment_check",
+      "category": "UTILITY",
+      "audience": "owner",
+      "components": [
+        { "type": "HEADER", "format": "IMAGE" },
+        {
+          "type": "BODY",
+          "text": "Payment to confirm for order {{1}} from {{2}}. Expected: {{3}}. Assistant pre-check: {{4}}. Please check your MoMo balance before approving.",
+          "example": { "body_text": [["MS-7K4Q", "Akosua (+233241234567)", "GHS 80.00", "amount ✅ recipient ✅ transaction ID ✅"]] }
+        },
+        { "type": "BUTTONS", "buttons": [{ "type": "QUICK_REPLY", "text": "Approve" }, { "type": "QUICK_REPLY", "text": "Reject" }] }
+      ]
+    },
+    {
+      "name": "owner_alert",
+      "category": "UTILITY",
+      "audience": "owner",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "New {{1}} from {{2}}. Details: {{3}}. Tap a button to respond.",
+          "example": { "body_text": [["chat request", "Akosua (+233241234567)", "Asked to speak to someone about a delivery"]] }
+        },
+        { "type": "BUTTONS", "buttons": [{ "type": "QUICK_REPLY", "text": "Take over chat" }, { "type": "QUICK_REPLY", "text": "Dismiss" }] }
+      ]
+    },
+    {
+      "name": "order_ready",
+      "category": "UTILITY",
+      "audience": "owner",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Order {{1}} is paid and ready for delivery: {{2}}. Customer: {{3}}. Location: {{4}}.",
+          "example": { "body_text": [["MS-7K4Q", "2 × Cinnamon 250ml", "Akosua (+233241234567)", "https://maps.google.com/?q=5.6,-0.18"]] }
+        },
+        { "type": "BUTTONS", "buttons": [{ "type": "QUICK_REPLY", "text": "On the way" }, { "type": "QUICK_REPLY", "text": "Delivered" }] }
+      ]
+    },
+    {
+      "name": "payment_confirmed",
+      "category": "UTILITY",
+      "audience": "customer",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Hi {{1}}, we've confirmed your payment for Mash & Sip order {{2}}. Please reply with your delivery location so we can bring it to you.",
+          "example": { "body_text": [["Akosua", "MS-7K4Q"]] }
+        }
+      ]
+    },
+    {
+      "name": "payment_not_confirmed",
+      "category": "UTILITY",
+      "audience": "customer",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Hi {{1}}, we couldn't confirm the payment for your Mash & Sip order {{2}}. Please reply here so we can sort it out together.",
+          "example": { "body_text": [["Akosua", "MS-7K4Q"]] }
+        }
+      ]
+    },
+    {
+      "name": "order_on_the_way",
+      "category": "UTILITY",
+      "audience": "customer",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Hi {{1}}, your Mash & Sip order {{2}} is on the way.",
+          "example": { "body_text": [["Akosua", "MS-7K4Q"]] }
+        }
+      ]
+    },
+    {
+      "name": "order_delivered",
+      "category": "UTILITY",
+      "audience": "customer",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Hi {{1}}, your Mash & Sip order {{2}} has been delivered. Enjoy, and thank you for ordering!",
+          "example": { "body_text": [["Akosua", "MS-7K4Q"]] }
+        }
+      ]
+    }
+  ]
+}

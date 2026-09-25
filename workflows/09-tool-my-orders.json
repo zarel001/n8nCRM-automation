@@ -1,0 +1,104 @@
+{
+  "id": "MsToolOrders0001",
+  "name": "Tool · My orders",
+  "description": "AI tool: the customer's own recent orders.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "customer_id",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "56d30c02-2a59-53ac-aba8-845363a01ec3",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select crm.customer_orders($1::jsonb) as result",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify({ customer_id: $json.customer_id, limit: 5 }) ] }}"
+        }
+      },
+      "id": "a5ad5d0b-502f-56c9-a53f-2c908c7f24a2",
+      "name": "Orders",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        280,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MsCredPostgres01",
+          "name": "Mash & Sip CRM (bot role)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── src/lib/orders.js ──\n// Storefront order contract (see Whatsapp-storefront/docs/whatsapp-bot-contract.md):\n//\n//   Order: {Variant} {Size} x{Qty}\n//   Name: {Customer name}\n//\n// Inlined into n8n Code nodes; keep dependency-free.\n\n// Reference patterns exported by the storefront (lib/whatsapp.ts). The parser below accepts a\n// superset (any case, \"×\" for x, stray spaces) because customers sometimes edit the text.\nconst ORDER_LINE_PATTERN = /^Order: (.+) (\\d+)ml x(\\d+)$/m;\nconst NAME_LINE_PATTERN = /^Name: ([\\p{L}\\p{M}' .-]{2,40})$/mu;\n\nconst LENIENT_ORDER_LINE = /^[ \\t]*order[ \\t]*:[ \\t]*(.+?)[ \\t]+(\\d{2,4})[ \\t]*ml[ \\t]*[x×*][ \\t]*(\\d{1,3})[ \\t]*$/im;\nconst LENIENT_NAME_LINE = /^[ \\t]*name[ \\t]*:[ \\t]*(.+?)[ \\t]*$/im;\nconst ORDER_ATTEMPT = /^[ \\t]*order[ \\t]*:/im;\n\nconst NAME_MAX = 40;\n\n// Same cleaning as the storefront's sanitizeName: letters, marks, spaces, apostrophes, dots and\n// hyphens on one line, so a name can't smuggle in a second \"Order:\" line.\nfunction sanitizeName(raw) {\n  return String(raw == null ? '' : raw)\n    .normalize('NFKC')\n    .replace(/[^\\p{L}\\p{M}' .-]/gu, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, NAME_MAX);\n}\n\n// Returns {variant, size, qty, name} or null. Validation against the catalog happens in the\n// database (crm.create_order), which is the single pricing authority.\nfunction parseOrderMessage(text) {\n  if (typeof text !== 'string') return null;\n  const t = text.replace(/\\r\\n?/g, '\\n');\n  const m = t.match(LENIENT_ORDER_LINE);\n  if (!m) return null;\n  const n = t.match(LENIENT_NAME_LINE);\n  const name = n ? sanitizeName(n[1]) : '';\n  return {\n    variant: m[1].replace(/\\s+/g, ' ').trim(),\n    size: `${Number(m[2])}ml`,\n    qty: Number(m[3]),\n    name: name.length >= 2 ? name : null,\n  };\n}\n\n// \"Order:\" is there but the line doesn't parse: worth a format hint rather than the AI agent.\nfunction looksLikeOrderAttempt(text) {\n  return typeof text === 'string' && ORDER_ATTEMPT.test(text) && parseOrderMessage(text) === null;\n}\n\nfunction money(amount, currency) {\n  return `${currency || 'GHS'} ${Number(amount || 0).toFixed(2)}`;\n}\n\nfunction orderLines(order) {\n  const currency = (order && order.currency) || 'GHS';\n  return ((order && order.items) || []).map(\n    (i) => `${i.qty} × ${i.variant} ${i.size} — ${money(Number(i.unit_price) * Number(i.qty), currency)}`,\n  );\n}\n\nfunction itemsSummary(order) {\n  return ((order && order.items) || []).map((i) => `${i.qty} × ${i.variant} ${i.size}`).join(', ');\n}\n\n// ── node logic ──\nconst orders = $input.first().json.result || [];\nif (!orders.length) return [{ json: { orders: [], note: 'This customer has no orders yet.' } }];\nreturn [{ json: { orders: orders.map((o) => ({\n  code: o.code,\n  status: o.status,\n  items: itemsSummary(o),\n  total: money(o.total, o.currency),\n  placed_at: o.created_at,\n  paid: Boolean(o.paid_at),\n  delivery_details_received: Boolean(o.delivery_location || o.delivery_note),\n})) } }];\n"
+      },
+      "id": "10b7bd7b-caf4-57b0-a620-982094ccf7a0",
+      "name": "Format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orders": {
+      "main": [
+        [
+          {
+            "node": "Format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "MsErrors00000001",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

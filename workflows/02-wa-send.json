@@ -1,0 +1,364 @@
+{
+  "id": "MsWaSend00000001",
+  "name": "WA · Send",
+  "description": "Sends WhatsApp messages (free-form inside the 24 h window, template outside it) and logs them.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "21de078e-d391-5dd3-a7c2-57941af4edcc",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── node logic ──\nconst out = [];\nfor (const item of $input.all()) {\n  const r = item.json;\n  const wa = r.whatsapp || {};\n  const url = `${wa.graph_base_url}/${wa.graph_version}/${wa.phone_number_id}/messages`;\n  const open = r.window_open !== false;\n  const list = open ? (r.payloads || []) : (r.template ? [r.template] : []);\n  const mode = open ? 'freeform' : (r.template ? 'template' : 'skipped');\n  if (!list.length) {\n    out.push({ json: { skip: true, mode, customer_id: r.customer_id ?? null, ref: r.ref ?? null } });\n    continue;\n  }\n  for (const payload of list) {\n    out.push({ json: { skip: false, mode, customer_id: r.customer_id ?? null, ref: r.ref ?? null, url, payload } });\n  }\n}\nreturn out;\n"
+      },
+      "id": "b3170ba9-d062-524e-a2f9-e7be6703b43e",
+      "name": "Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3ea7b5f5-250c-5d92-aee7-d8a000e03c3d",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "0e22a5f9-3d2a-5726-a0af-0ac5bade3221",
+      "name": "Nothing to send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 0
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "3fb1383e-342a-58d2-aaee-6675d0045b58",
+      "name": "Send to WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        840,
+        0
+      ],
+      "credentials": {
+        "whatsAppApi": {
+          "id": "MsCredWhatsApp01",
+          "name": "WhatsApp Cloud API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── src/lib/wa.js ──\n// WhatsApp Cloud API outbound message payloads (POST /{phone-number-id}/messages).\n// Limits enforced here so a long customer name or AI reply can't make Meta reject the message.\n//\n// Inlined into n8n Code nodes; keep dependency-free.\n\nconst WA_LIMITS = { text: 4096, interactiveBody: 1024, buttonTitle: 20, buttonId: 256, footer: 60, header: 60, caption: 1024 };\n\nfunction clip(value, max) {\n  const s = String(value == null ? '' : value);\n  return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;\n}\n\n// `to` (phone) wins when both are present; `recipient` carries a business-scoped user ID for\n// customers who hide their number behind a WhatsApp username.\nfunction waRecipient(r) {\n  if (r && r.wa_id) return { to: String(r.wa_id) };\n  if (r && r.bsuid) return { recipient: String(r.bsuid) };\n  throw new Error('Recipient has neither wa_id nor bsuid');\n}\n\nfunction waBase(r) {\n  return { messaging_product: 'whatsapp', recipient_type: 'individual', ...waRecipient(r) };\n}\n\nfunction waText(r, body, options) {\n  return { ...waBase(r), type: 'text', text: { body: clip(body, WA_LIMITS.text), preview_url: Boolean(options && options.previewUrl) } };\n}\n\n// buttons: [{id, title}] (max 3). header: {text} or {imageId}.\nfunction waButtons(r, body, buttons, options) {\n  const opts = options || {};\n  const interactive = {\n    type: 'button',\n    body: { text: clip(body, WA_LIMITS.interactiveBody) },\n    action: {\n      buttons: (buttons || []).slice(0, 3).map((b) => ({\n        type: 'reply',\n        reply: { id: clip(b.id, WA_LIMITS.buttonId), title: clip(b.title, WA_LIMITS.buttonTitle) },\n      })),\n    },\n  };\n  if (opts.header && opts.header.imageId) interactive.header = { type: 'image', image: { id: opts.header.imageId } };\n  else if (opts.header && opts.header.text) interactive.header = { type: 'text', text: clip(opts.header.text, WA_LIMITS.header) };\n  if (opts.footer) interactive.footer = { text: clip(opts.footer, WA_LIMITS.footer) };\n  return { ...waBase(r), type: 'interactive', interactive };\n}\n\nfunction waLocationRequest(r, body) {\n  return {\n    ...waBase(r),\n    type: 'interactive',\n    interactive: {\n      type: 'location_request_message',\n      body: { text: clip(body, WA_LIMITS.interactiveBody) },\n      action: { name: 'send_location' },\n    },\n  };\n}\n\nfunction waImage(r, mediaId, caption) {\n  const image = { id: mediaId };\n  if (caption) image.caption = clip(caption, WA_LIMITS.caption);\n  return { ...waBase(r), type: 'image', image };\n}\n\n// components: raw Cloud API template components (header/body/button parameters).\nfunction waTemplate(r, name, language, components) {\n  return { ...waBase(r), type: 'template', template: { name, language: { code: language || 'en' }, components: components || [] } };\n}\n\nfunction waTemplateText(value) {\n  // Template parameters can't contain newlines, tabs or more than four consecutive spaces.\n  return { type: 'text', text: clip(String(value == null ? '' : value).replace(/[\\n\\t]+/g, ' ').replace(/ {4,}/g, '   '), 1024) };\n}\n\n// Marks the customer's message as read and shows \"typing…\" until the reply is sent (max ~25 s).\nfunction waTyping(messageId) {\n  return { messaging_product: 'whatsapp', status: 'read', message_id: messageId, typing_indicator: { type: 'text' } };\n}\n\nfunction waRecipientOf(customer) {\n  return { wa_id: (customer && customer.wa_id) || null, bsuid: (customer && customer.bsuid) || null };\n}\n\n// Input for the \"WA · Send\" sub-workflow: free-form payloads when the recipient's 24-hour window\n// is open, otherwise the template (or nothing, if there is none).\nfunction waSendRequest(customer, payloads, template, settings, ref) {\n  return {\n    customer_id: customer.id,\n    window_open: customer.window_open !== false,\n    payloads: payloads || [],\n    template: template || null,\n    whatsapp: (settings && settings.whatsapp) || {},\n    // a failed send (expired token, blocked number…) alerts the developer straight away\n    alert_url: (settings && settings.alerts && settings.alerts.webhook_url) || null,\n    ref: ref === undefined ? null : ref,\n  };\n}\n\n// Short human-readable version of an outbound payload for the conversation log.\nfunction waLogBody(payload) {\n  if (!payload) return '';\n  switch (payload.type) {\n    case 'text':\n      return payload.text.body;\n    case 'interactive':\n      return (payload.interactive.body && payload.interactive.body.text) || `[${payload.interactive.type}]`;\n    case 'image':\n      return `[image] ${(payload.image && payload.image.caption) || ''}`.trim();\n    case 'template':\n      return `[template ${payload.template.name}]`;\n    default:\n      return `[${payload.type}]`;\n  }\n}\n\n// ── node logic ──\nconst planned = $('Plan').all().filter((i) => !i.json.skip);\nreturn $input.all().map((item, idx) => {\n  const plan = (planned[idx] || {}).json || {};\n  const res = item.json || {};\n  const status = res.statusCode ?? null;\n  const body = res.body ?? null;\n  const ok = status !== null && status >= 200 && status < 300;\n  const waMessageId = ok && body && body.messages && body.messages[0] ? body.messages[0].id : null;\n  const error = ok ? null : ((body && body.error) || { message: (res.error && res.error.message) || res.message || 'send failed', status });\n  return { json: {\n    customer_id: plan.customer_id, wa_message_id: waMessageId, type: (plan.payload && plan.payload.type) || 'text',\n    body: waLogBody(plan.payload), payload: plan.payload, error, ok, mode: plan.mode, ref: plan.ref,\n  } };\n});\n"
+      },
+      "id": "24828993-402f-59e5-a24c-a2684ffa31a1",
+      "name": "Log rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select crm.log_outbound($1::jsonb) as result",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify({ customer_id: $json.customer_id, wa_message_id: $json.wa_message_id, type: $json.type, body: $json.body, payload: $json.payload, error: $json.error }) ] }}"
+        }
+      },
+      "id": "56be1061-f05c-52ba-a39a-6a90694eeccc",
+      "name": "Log outbound",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1400,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MsCredPostgres01",
+          "name": "Mash & Sip CRM (bot role)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── node logic ──\nconst start = $('Start').first().json;\nconst failed = $('Log rows').all().map((i) => i.json).filter((r) => !r.ok);\nconst detail = failed.map((r) => (r.error && (r.error.message || r.error.code)) || 'unknown error').join('; ');\nreturn [{ json: {\n  alert: failed.length > 0 && Boolean(start.alert_url),\n  url: start.alert_url,\n  text: '⚠️ WhatsApp send failed (' + failed.length + ' message' + (failed.length === 1 ? '' : 's') + ', customer ' + start.customer_id + '): ' + detail.slice(0, 500),\n} }];\n"
+      },
+      "id": "cc09e91e-a585-5296-a4f3-1054554d0f63",
+      "name": "Failures",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "bc097c17-5ae8-5074-aae6-ba57f685e71e",
+              "leftValue": "={{ $json.alert }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "859cef69-2301-56de-a014-2d45a218d15d",
+      "name": "Alert needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.text, content: $json.text }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "d8b3b9cf-e4ef-55a5-af21-236d8131e2cc",
+      "name": "Alert developer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2240,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── node logic ──\nconst first = $input.first().json;\nif (first.skip) {\n  return [{ json: { ok: false, skipped: true, mode: first.mode, sent: 0, ref: first.ref ?? null } }];\n}\nconst rows = $('Log rows').all().map((i) => i.json);\nconst failed = rows.filter((r) => !r.ok);\nreturn [{ json: {\n  ok: failed.length === 0, skipped: false, mode: rows[0] ? rows[0].mode : null, sent: rows.length - failed.length,\n  errors: failed.map((r) => r.error), wa_message_ids: rows.map((r) => r.wa_message_id).filter(Boolean), ref: rows[0] ? rows[0].ref : null,\n} }];\n"
+      },
+      "id": "8e661984-bf8e-58c2-af30-ea7a9e0192ed",
+      "name": "Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan": {
+      "main": [
+        [
+          {
+            "node": "Nothing to send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nothing to send?": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send to WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Log rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log rows": {
+      "main": [
+        [
+          {
+            "node": "Log outbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log outbound": {
+      "main": [
+        [
+          {
+            "node": "Failures",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failures": {
+      "main": [
+        [
+          {
+            "node": "Alert needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert needed?": {
+      "main": [
+        [
+          {
+            "node": "Alert developer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert developer": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "MsErrors00000001",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

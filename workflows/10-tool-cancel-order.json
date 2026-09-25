@@ -1,0 +1,108 @@
+{
+  "id": "MsToolCancel0001",
+  "name": "Tool · Cancel order",
+  "description": "AI tool: cancel the customer's own unpaid order.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "customer_id",
+              "type": "number"
+            },
+            {
+              "name": "code",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "ec6f533b-8209-55ad-a3d4-d87c9e46314d",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select crm.cancel_order($1::jsonb) as result",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify({ customer_id: $json.customer_id, code: $json.code || '' }) ] }}"
+        }
+      },
+      "id": "2afe6aea-e5bd-5192-a517-4e50e7576519",
+      "name": "Cancel",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        280,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MsCredPostgres01",
+          "name": "Mash & Sip CRM (bot role)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── node logic ──\nconst r = $input.first().json.result;\nreturn [{ json: r.ok\n  ? { ok: true, cancelled: r.order.code, note: 'Tell the customer the order is cancelled.' }\n  : { ok: false, error: r.error, note: 'There is no unpaid order to cancel for this customer.' } }];\n"
+      },
+      "id": "6e5bcfda-db5d-5b85-aae9-ca55e2eb780f",
+      "name": "Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Cancel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancel": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "MsErrors00000001",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

@@ -1,0 +1,26 @@
+{
+  "name": "n8ncrm-automation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "n8n WhatsApp AI agent + CRM for the Mash & Sip storefront",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build-workflows.mjs",
+    "check": "node scripts/build-workflows.mjs --check",
+    "test": "node --test tests/unit/*.test.js gate/*.test.js",
+    "test:db": "node --test --test-concurrency=1 tests/db/*.test.js",
+    "test:e2e": "node --test --test-concurrency=1 tests/e2e/*.test.js",
+    "demo": "node scripts/local.mjs demo",
+    "demo:stop": "node scripts/local.mjs stop demo",
+    "demo:reset": "node scripts/local.mjs reset demo",
+    "local:whatsapp": "node scripts/local.mjs whatsapp",
+    "local:stop": "node scripts/local.mjs stop whatsapp",
+    "local:reset": "node scripts/local.mjs reset whatsapp"
+  },
+  "devDependencies": {
+    "pg": "^8.16.3"
+  }
+}

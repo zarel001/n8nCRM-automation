@@ -1,0 +1,840 @@
+{
+  "id": "MsInbound0000001",
+  "name": "WA · Inbound",
+  "description": "Receives verified WhatsApp webhooks from the gate, logs and routes every message.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa-inbound",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "7b45f073-0dad-517a-a2de-a6bcc76383f9",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MsCredGateToken1",
+          "name": "Webhook gate token"
+        }
+      },
+      "webhookId": "6f3f2a1e-9a57-4f0e-8f0c-5a1c2e7b9d41"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select crm.get_settings() as settings",
+        "options": {}
+      },
+      "id": "5b95b944-3dec-5b6c-aed0-f60589cbadf6",
+      "name": "Settings",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        280,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MsCredPostgres01",
+          "name": "Mash & Sip CRM (bot role)"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── src/lib/meta.js ──\n// WhatsApp Cloud API webhook parsing.\n//\n// Inlined into n8n Code nodes by scripts/build-workflows.mjs, so this file must stay\n// dependency-free and only declare functions/constants.\n\nconst PHONE_ID_PATTERN = /^\\d{6,15}$/;\n// Business-scoped user ID: ISO country code, a dot, then an opaque ID (e.g. \"GH.13491208655302741918\").\nconst BSUID_PATTERN = /^[A-Z]{2}\\.[A-Za-z0-9._-]{1,160}$/;\n\nfunction metaIdentity(message, contact) {\n  const m = message || {};\n  const c = contact || {};\n  const idCandidates = [m.from, c.wa_id].filter(Boolean).map(String);\n  const phone = idCandidates.find((v) => PHONE_ID_PATTERN.test(v)) || null;\n  const explicitBsuid = [m.from_user_id, m.user_id, c.user_id].filter(Boolean).map(String)[0];\n  const bsuid = explicitBsuid || idCandidates.find((v) => BSUID_PATTERN.test(v)) || null;\n  return {\n    phone,\n    bsuid,\n    profileName: (c.profile && c.profile.name) || null,\n    username: c.username || (c.profile && c.profile.username) || null,\n  };\n}\n\nfunction metaMedia(part) {\n  if (!part) return null;\n  return {\n    mediaId: part.id || null,\n    mimeType: part.mime_type || null,\n    sha256: part.sha256 || null,\n    caption: part.caption || null,\n    filename: part.filename || null,\n    voice: part.voice === true,\n  };\n}\n\n// Reduces one inbound message to the fields the workflows use, plus a one-line `body` for the log.\nfunction metaMessage(m, contact, metadata) {\n  const type = m.type || 'unknown';\n  const out = {\n    kind: 'message',\n    waMessageId: m.id,\n    timestamp: m.timestamp ? Number(m.timestamp) : null,\n    phoneNumberId: (metadata && metadata.phone_number_id) || null,\n    from: metaIdentity(m, contact),\n    type,\n    text: null,\n    media: null,\n    location: null,\n    reply: null,\n    reaction: null,\n    contextId: (m.context && m.context.id) || null,\n    referral: m.referral || null,\n    errors: m.errors || null,\n    body: null,\n  };\n\n  switch (type) {\n    case 'text':\n      out.text = (m.text && m.text.body) || '';\n      out.body = out.text;\n      break;\n    case 'image':\n    case 'video':\n    case 'audio':\n    case 'document':\n    case 'sticker':\n      out.media = metaMedia(m[type]);\n      out.text = (out.media && out.media.caption) || null;\n      out.body = `[${type === 'audio' && out.media && out.media.voice ? 'voice note' : type}]` +\n        (out.text ? ` ${out.text}` : '');\n      break;\n    case 'location': {\n      const l = m.location || {};\n      out.location = {\n        latitude: Number(l.latitude),\n        longitude: Number(l.longitude),\n        name: l.name || null,\n        address: l.address || null,\n        url: l.url || null,\n      };\n      out.body = `[location] ${[l.name, l.address].filter(Boolean).join(', ') || `${l.latitude},${l.longitude}`}`;\n      break;\n    }\n    case 'interactive': {\n      const i = m.interactive || {};\n      const r = i.button_reply || i.list_reply || null;\n      if (r) {\n        out.reply = { id: r.id || '', title: r.title || '', description: r.description || null };\n        out.body = `[reply] ${out.reply.title}`;\n      } else if (i.nfm_reply) {\n        out.reply = { id: 'flow', title: i.nfm_reply.name || 'flow', responseJson: i.nfm_reply.response_json || null };\n        out.body = '[flow reply]';\n      }\n      break;\n    }\n    case 'button':\n      // quick-reply button on a template message\n      out.reply = { id: (m.button && m.button.payload) || '', title: (m.button && m.button.text) || '' };\n      out.body = `[reply] ${out.reply.title}`;\n      break;\n    case 'reaction':\n      out.reaction = { messageId: (m.reaction && m.reaction.message_id) || null, emoji: (m.reaction && m.reaction.emoji) || '' };\n      out.body = `[reaction] ${out.reaction.emoji}`;\n      break;\n    default:\n      out.body = `[${type}]`;\n  }\n  return out;\n}\n\nfunction metaStatus(s, metadata) {\n  return {\n    kind: 'status',\n    waMessageId: s.id,\n    status: s.status,\n    timestamp: s.timestamp ? Number(s.timestamp) : null,\n    phoneNumberId: (metadata && metadata.phone_number_id) || null,\n    recipientPhone: s.recipient_id || null,\n    recipientBsuid: s.recipient_user_id || null,\n    errors: s.errors || null,\n  };\n}\n\n// One webhook POST can batch several messages and statuses; returns them as a flat list.\nfunction normalizeWebhook(body) {\n  const events = [];\n  if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) return events;\n  for (const entry of body.entry) {\n    for (const change of entry.changes || []) {\n      if (change.field !== 'messages' || !change.value) continue;\n      const v = change.value;\n      const contacts = Array.isArray(v.contacts) ? v.contacts : [];\n      for (const m of v.messages || []) {\n        const contact =\n          contacts.find((c) => (m.from && c.wa_id === m.from) || (m.from_user_id && c.user_id === m.from_user_id)) ||\n          contacts[0] ||\n          {};\n        events.push(metaMessage(m, contact, v.metadata));\n      }\n      for (const s of v.statuses || []) events.push(metaStatus(s, v.metadata));\n    }\n  }\n  return events;\n}\n\n// ── node logic ──\nconst body = $('Webhook').first().json.body;\nconst settings = $('Settings').first().json.settings;\nconst ourNumber = settings.whatsapp && settings.whatsapp.phone_number_id;\nreturn normalizeWebhook(body)\n  // ignore events for other numbers on the same WhatsApp Business Account\n  .filter((e) => !ourNumber || !e.phoneNumberId || String(e.phoneNumberId) === String(ourNumber))\n  .map((event) => ({ json: { event } }));\n"
+      },
+      "id": "8c949152-59d3-524b-aefe-498a551c4973",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "b9d75540-b5ff-5c88-a2cf-6d5942572c71",
+                    "leftValue": "={{ $json.event.kind }}",
+                    "rightValue": "message",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "message"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "a149c470-fe59-5b0e-ad02-e038be345561",
+                    "leftValue": "={{ $json.event.kind }}",
+                    "rightValue": "status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "7a16b41a-f41b-53bd-affa-b274311fc591",
+      "name": "Message or status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        840,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select crm.apply_status($1::jsonb) as result",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify({ wa_message_id: $json.event.waMessageId, status: $json.event.status, errors: $json.event.errors }) ] }}"
+        }
+      },
+      "id": "6e8438cb-9959-5954-a44d-e32dcfa06caa",
+      "name": "Record status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1120,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MsCredPostgres01",
+          "name": "Mash & Sip CRM (bot role)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select crm.ingest_inbound($1::jsonb) as state, $2::jsonb as event",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify({ wa_message_id: $json.event.waMessageId, phone: $json.event.from.phone, bsuid: $json.event.from.bsuid,\n         profile_name: $json.event.from.profileName, username: $json.event.from.username, type: $json.event.type,\n         body: $json.event.body,\n         payload: { text: $json.event.text, media: $json.event.media, location: $json.event.location,\n                    reply: $json.event.reply, context_id: $json.event.contextId, referral: $json.event.referral } }), JSON.stringify($json.event) ] }}"
+        }
+      },
+      "id": "628181b0-4f44-5268-ad44-5c131f2a0cb7",
+      "name": "Ingest",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1120,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MsCredPostgres01",
+          "name": "Mash & Sip CRM (bot role)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── src/lib/orders.js ──\n// Storefront order contract (see Whatsapp-storefront/docs/whatsapp-bot-contract.md):\n//\n//   Order: {Variant} {Size} x{Qty}\n//   Name: {Customer name}\n//\n// Inlined into n8n Code nodes; keep dependency-free.\n\n// Reference patterns exported by the storefront (lib/whatsapp.ts). The parser below accepts a\n// superset (any case, \"×\" for x, stray spaces) because customers sometimes edit the text.\nconst ORDER_LINE_PATTERN = /^Order: (.+) (\\d+)ml x(\\d+)$/m;\nconst NAME_LINE_PATTERN = /^Name: ([\\p{L}\\p{M}' .-]{2,40})$/mu;\n\nconst LENIENT_ORDER_LINE = /^[ \\t]*order[ \\t]*:[ \\t]*(.+?)[ \\t]+(\\d{2,4})[ \\t]*ml[ \\t]*[x×*][ \\t]*(\\d{1,3})[ \\t]*$/im;\nconst LENIENT_NAME_LINE = /^[ \\t]*name[ \\t]*:[ \\t]*(.+?)[ \\t]*$/im;\nconst ORDER_ATTEMPT = /^[ \\t]*order[ \\t]*:/im;\n\nconst NAME_MAX = 40;\n\n// Same cleaning as the storefront's sanitizeName: letters, marks, spaces, apostrophes, dots and\n// hyphens on one line, so a name can't smuggle in a second \"Order:\" line.\nfunction sanitizeName(raw) {\n  return String(raw == null ? '' : raw)\n    .normalize('NFKC')\n    .replace(/[^\\p{L}\\p{M}' .-]/gu, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, NAME_MAX);\n}\n\n// Returns {variant, size, qty, name} or null. Validation against the catalog happens in the\n// database (crm.create_order), which is the single pricing authority.\nfunction parseOrderMessage(text) {\n  if (typeof text !== 'string') return null;\n  const t = text.replace(/\\r\\n?/g, '\\n');\n  const m = t.match(LENIENT_ORDER_LINE);\n  if (!m) return null;\n  const n = t.match(LENIENT_NAME_LINE);\n  const name = n ? sanitizeName(n[1]) : '';\n  return {\n    variant: m[1].replace(/\\s+/g, ' ').trim(),\n    size: `${Number(m[2])}ml`,\n    qty: Number(m[3]),\n    name: name.length >= 2 ? name : null,\n  };\n}\n\n// \"Order:\" is there but the line doesn't parse: worth a format hint rather than the AI agent.\nfunction looksLikeOrderAttempt(text) {\n  return typeof text === 'string' && ORDER_ATTEMPT.test(text) && parseOrderMessage(text) === null;\n}\n\nfunction money(amount, currency) {\n  return `${currency || 'GHS'} ${Number(amount || 0).toFixed(2)}`;\n}\n\nfunction orderLines(order) {\n  const currency = (order && order.currency) || 'GHS';\n  return ((order && order.items) || []).map(\n    (i) => `${i.qty} × ${i.variant} ${i.size} — ${money(Number(i.unit_price) * Number(i.qty), currency)}`,\n  );\n}\n\nfunction itemsSummary(order) {\n  return ((order && order.items) || []).map((i) => `${i.qty} × ${i.variant} ${i.size}`).join(', ');\n}\n\n// ── src/lib/router.js ──\n// Decides what happens to each inbound message. Deterministic paths (orders, payments, delivery\n// pins, keywords, owner actions) never reach the AI agent: they're cheaper, faster and can't be\n// talked into doing something else.\n//\n// Inlined into n8n Code nodes after orders.js (uses parseOrderMessage / looksLikeOrderAttempt).\n/* global parseOrderMessage, looksLikeOrderAttempt */\n\nconst ROUTE_KEYWORDS = {\n  optOut: /^\\s*(stop|stop all|unsubscribe)\\s*[.!]*\\s*$/i,\n  optIn: /^\\s*(start|unstop|subscribe)\\s*[.!]*\\s*$/i,\n  human: /^\\s*(human|agent|person|real person|(talk|speak|chat) (to|with) (a |the )?(human|person|someone|agent|team|owner)|call me)\\s*[.!?]*\\s*$/i,\n  cancel: /^\\s*cancel( (my|the))?( order)?\\s*[.!]*\\s*$/i,\n};\n\nfunction describeLocation(location) {\n  const l = location || {};\n  return [l.name, l.address].filter(Boolean).join(', ') || `${l.latitude}, ${l.longitude}`;\n}\n\n// msg: output of metaMessage(); state: output of crm.ingest_inbound().\n// Returns {route, ...details}.\nfunction routeInbound(msg, state) {\n  if (!state || state.duplicate) return { route: 'ignore', reason: 'duplicate' };\n  const customer = state.customer || {};\n  if (customer.is_owner) return { route: 'owner' };\n\n  const text = String(msg.text || '').trim();\n  const replyId = (msg.reply && msg.reply.id) || '';\n\n  if (['reaction', 'sticker', 'system', 'request_welcome'].includes(msg.type)) {\n    return { route: 'ignore', reason: msg.type };\n  }\n\n  // A checkout message or a payment screenshot still goes through the normal flow while the\n  // owner is chatting with this customer; everything else is forwarded to the owner.\n  const order = msg.type === 'text' ? parseOrderMessage(text) : null;\n  if (customer.bot_paused) {\n    if (order) return { route: 'order', order };\n    if (msg.type === 'image' && state.open_order) return { route: 'payment' };\n    return { route: 'takeover_forward' };\n  }\n\n  if (replyId.startsWith('cust:')) {\n    const [, action, id] = replyId.split(':');\n    if (action === 'cancel') return { route: 'cancel', orderId: Number(id) || null };\n    if (action === 'human') return { route: 'human', reason: 'Tapped \"Talk to a person\"' };\n  }\n\n  switch (msg.type) {\n    case 'text':\n      if (ROUTE_KEYWORDS.optOut.test(text)) return { route: 'opt_out' };\n      if (ROUTE_KEYWORDS.optIn.test(text)) return { route: 'opt_in' };\n      if (ROUTE_KEYWORDS.human.test(text)) return { route: 'human', reason: 'Asked for a person' };\n      if (ROUTE_KEYWORDS.cancel.test(text)) return { route: 'cancel', orderId: null };\n      if (order) return { route: 'order', order };\n      if (looksLikeOrderAttempt(text)) return { route: 'order_help' };\n      return { route: 'agent' };\n    case 'image':\n      if (state.open_order) return { route: 'payment' };\n      return { route: 'agent', note: `[The customer sent a photo${text ? ` with the caption \"${text}\"` : ''}]` };\n    case 'document':\n      return state.open_order ? { route: 'receipt_not_image' } : { route: 'unsupported' };\n    case 'location':\n      if (state.awaiting_location_order) return { route: 'location' };\n      return { route: 'agent', note: `[The customer shared a location: ${describeLocation(msg.location)}]` };\n    case 'audio':\n      return { route: 'voice' };\n    case 'interactive':\n    case 'button':\n      // an old button, or a button from a message the bot didn't send\n      return { route: 'agent', note: `[The customer tapped \"${(msg.reply && msg.reply.title) || 'a button'}\"]` };\n    case 'video':\n    case 'contacts':\n    case 'order':\n    case 'unsupported':\n      return { route: 'unsupported' };\n    default:\n      return { route: 'ignore', reason: msg.type };\n  }\n}\n\n// ── node logic ──\nconst settings = $('Settings').first().json.settings;\nconst out = [];\nfor (const item of $input.all()) {\n  const { state, event } = item.json;\n  const decision = routeInbound(event, state);\n  if (decision.route === 'ignore') continue;\n  out.push({ json: { route: decision.route, decision, msg: event, state, settings } });\n}\nreturn out;\n"
+      },
+      "id": "180b8d45-3f68-5d36-a842-bbe18ca9aeeb",
+      "name": "Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "ea009c45-0ca5-5958-a0f3-7f5e8088a346",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "owner",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "owner"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "6a212bce-6ac6-5cb1-a1cd-598eec6224a0",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "order",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "order"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "5d4421c9-da44-5746-af36-b8c2f2fb604d",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "payment",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "payment"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "9ddebefd-84af-52d6-a06e-c6ddb7f070b4",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "agent",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "agent"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "3fdf7bed-9607-52ec-a499-944d936e4cbe",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "human",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "human"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "6c9cc064-4d57-50c3-add9-d05ca3beed08",
+      "name": "By route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "MsOwner000000001"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "e6d8fd58-3829-5323-ad9e-31953be356d9",
+      "name": "Owner flow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "MsOrder000000001"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "customer_id": "={{ $json.state.customer.id }}",
+            "variant": "={{ $json.decision.order.variant }}",
+            "size": "={{ $json.decision.order.size }}",
+            "qty": "={{ $json.decision.order.qty }}",
+            "name": "={{ $json.decision.order.name || '' }}",
+            "source": "storefront",
+            "first_contact": "={{ $json.state.is_new }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "customer_id",
+              "displayName": "customer_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "variant",
+              "displayName": "variant",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "size",
+              "displayName": "size",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "qty",
+              "displayName": "qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "first_contact",
+              "displayName": "first_contact",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "id": "22c05d9f-7ba2-507f-acdc-2a5c7efe069e",
+      "name": "Order flow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1960,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "MsPayment0000001"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "1a6366ce-89d4-54ae-a3ae-209d871d0663",
+      "name": "Payment flow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1960,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "MsAgent000000001"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "107bf9b3-7441-59b3-aa2a-0a4d4867cd8b",
+      "name": "Agent flow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1960,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "MsEscalate000001"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "customer_id": "={{ $json.state.customer.id }}",
+            "kind": "human_request",
+            "reason": "={{ $json.decision.reason || 'Asked for a person' }}",
+            "summary": "",
+            "event_type": "",
+            "event_date": "",
+            "quantity_estimate": 0,
+            "area": "",
+            "flavours": "",
+            "notes": "",
+            "contact_name": "",
+            "notify_customer": true,
+            "last_message": "={{ $json.msg.body || '' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "customer_id",
+              "displayName": "customer_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "kind",
+              "displayName": "kind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "reason",
+              "displayName": "reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "event_type",
+              "displayName": "event_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "event_date",
+              "displayName": "event_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "quantity_estimate",
+              "displayName": "quantity_estimate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "area",
+              "displayName": "area",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "flavours",
+              "displayName": "flavours",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "contact_name",
+              "displayName": "contact_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "notify_customer",
+              "displayName": "notify_customer",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean",
+              "removed": false
+            },
+            {
+              "id": "last_message",
+              "displayName": "last_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "id": "fcaf56b1-3545-555f-a831-2ede462531a1",
+      "name": "Human request",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1960,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "MsCustomer000001"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "9b65f802-2850-59de-aa6d-2ffbc503956e",
+      "name": "Customer flow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1960,
+        1000
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize": {
+      "main": [
+        [
+          {
+            "node": "Message or status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message or status": {
+      "main": [
+        [
+          {
+            "node": "Ingest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "By route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "By route": {
+      "main": [
+        [
+          {
+            "node": "Owner flow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Order flow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Payment flow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Agent flow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Human request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Customer flow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "MsErrors00000001",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
