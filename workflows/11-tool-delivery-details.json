@@ -1,0 +1,253 @@
+{
+  "id": "MsToolDeliver001",
+  "name": "Tool · Delivery details",
+  "description": "AI tool: save a typed delivery address and alert the owner.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "customer_id",
+              "type": "number"
+            },
+            {
+              "name": "note",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "e2893914-10c1-5ef5-a6b6-798ebd83e335",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select crm.set_delivery_note($1::jsonb) as result",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify({ customer_id: $json.customer_id, note: $json.note }) ] }}"
+        }
+      },
+      "id": "6499533b-46b0-5499-a25e-f19de6bfab81",
+      "name": "Save note",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        280,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MsCredPostgres01",
+          "name": "Mash & Sip CRM (bot role)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f210a593-e856-56e8-a177-bc7d9f156c5a",
+              "leftValue": "={{ $json.result.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "3033bd60-971b-55fd-ace0-3bbfcab7e724",
+      "name": "Saved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select crm.get_owner('{}'::jsonb) as owner, crm.get_customer($1::jsonb) as customer, crm.get_settings() as settings",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify({ customer_id: $('Start').first().json.customer_id }) ] }}"
+        }
+      },
+      "id": "3cdadf3e-ed7f-5413-a27f-88ab2c16dd7a",
+      "name": "Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        840,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MsCredPostgres01",
+          "name": "Mash & Sip CRM (bot role)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── src/lib/wa.js ──\n// WhatsApp Cloud API outbound message payloads (POST /{phone-number-id}/messages).\n// Limits enforced here so a long customer name or AI reply can't make Meta reject the message.\n//\n// Inlined into n8n Code nodes; keep dependency-free.\n\nconst WA_LIMITS = { text: 4096, interactiveBody: 1024, buttonTitle: 20, buttonId: 256, footer: 60, header: 60, caption: 1024 };\n\nfunction clip(value, max) {\n  const s = String(value == null ? '' : value);\n  return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;\n}\n\n// `to` (phone) wins when both are present; `recipient` carries a business-scoped user ID for\n// customers who hide their number behind a WhatsApp username.\nfunction waRecipient(r) {\n  if (r && r.wa_id) return { to: String(r.wa_id) };\n  if (r && r.bsuid) return { recipient: String(r.bsuid) };\n  throw new Error('Recipient has neither wa_id nor bsuid');\n}\n\nfunction waBase(r) {\n  return { messaging_product: 'whatsapp', recipient_type: 'individual', ...waRecipient(r) };\n}\n\nfunction waText(r, body, options) {\n  return { ...waBase(r), type: 'text', text: { body: clip(body, WA_LIMITS.text), preview_url: Boolean(options && options.previewUrl) } };\n}\n\n// buttons: [{id, title}] (max 3). header: {text} or {imageId}.\nfunction waButtons(r, body, buttons, options) {\n  const opts = options || {};\n  const interactive = {\n    type: 'button',\n    body: { text: clip(body, WA_LIMITS.interactiveBody) },\n    action: {\n      buttons: (buttons || []).slice(0, 3).map((b) => ({\n        type: 'reply',\n        reply: { id: clip(b.id, WA_LIMITS.buttonId), title: clip(b.title, WA_LIMITS.buttonTitle) },\n      })),\n    },\n  };\n  if (opts.header && opts.header.imageId) interactive.header = { type: 'image', image: { id: opts.header.imageId } };\n  else if (opts.header && opts.header.text) interactive.header = { type: 'text', text: clip(opts.header.text, WA_LIMITS.header) };\n  if (opts.footer) interactive.footer = { text: clip(opts.footer, WA_LIMITS.footer) };\n  return { ...waBase(r), type: 'interactive', interactive };\n}\n\nfunction waLocationRequest(r, body) {\n  return {\n    ...waBase(r),\n    type: 'interactive',\n    interactive: {\n      type: 'location_request_message',\n      body: { text: clip(body, WA_LIMITS.interactiveBody) },\n      action: { name: 'send_location' },\n    },\n  };\n}\n\nfunction waImage(r, mediaId, caption) {\n  const image = { id: mediaId };\n  if (caption) image.caption = clip(caption, WA_LIMITS.caption);\n  return { ...waBase(r), type: 'image', image };\n}\n\n// components: raw Cloud API template components (header/body/button parameters).\nfunction waTemplate(r, name, language, components) {\n  return { ...waBase(r), type: 'template', template: { name, language: { code: language || 'en' }, components: components || [] } };\n}\n\nfunction waTemplateText(value) {\n  // Template parameters can't contain newlines, tabs or more than four consecutive spaces.\n  return { type: 'text', text: clip(String(value == null ? '' : value).replace(/[\\n\\t]+/g, ' ').replace(/ {4,}/g, '   '), 1024) };\n}\n\n// Marks the customer's message as read and shows \"typing…\" until the reply is sent (max ~25 s).\nfunction waTyping(messageId) {\n  return { messaging_product: 'whatsapp', status: 'read', message_id: messageId, typing_indicator: { type: 'text' } };\n}\n\nfunction waRecipientOf(customer) {\n  return { wa_id: (customer && customer.wa_id) || null, bsuid: (customer && customer.bsuid) || null };\n}\n\n// Input for the \"WA · Send\" sub-workflow: free-form payloads when the recipient's 24-hour window\n// is open, otherwise the template (or nothing, if there is none).\nfunction waSendRequest(customer, payloads, template, settings, ref) {\n  return {\n    customer_id: customer.id,\n    window_open: customer.window_open !== false,\n    payloads: payloads || [],\n    template: template || null,\n    whatsapp: (settings && settings.whatsapp) || {},\n    // a failed send (expired token, blocked number…) alerts the developer straight away\n    alert_url: (settings && settings.alerts && settings.alerts.webhook_url) || null,\n    ref: ref === undefined ? null : ref,\n  };\n}\n\n// Short human-readable version of an outbound payload for the conversation log.\nfunction waLogBody(payload) {\n  if (!payload) return '';\n  switch (payload.type) {\n    case 'text':\n      return payload.text.body;\n    case 'interactive':\n      return (payload.interactive.body && payload.interactive.body.text) || `[${payload.interactive.type}]`;\n    case 'image':\n      return `[image] ${(payload.image && payload.image.caption) || ''}`.trim();\n    case 'template':\n      return `[template ${payload.template.name}]`;\n    default:\n      return `[${payload.type}]`;\n  }\n}\n\n// ── src/lib/copy.js ──\n// Every message the bot sends that isn't written by the AI agent. Brand voice lives here.\n// WhatsApp formatting: *bold*, _italic_.\n//\n// Inlined into n8n Code nodes; keep dependency-free (money/lines are duplicated from orders.js on\n// purpose so this file stands alone).\n\nfunction copyMoney(amount, currency) {\n  return `${currency || 'GHS'} ${Number(amount || 0).toFixed(2)}`;\n}\n\nfunction copyLines(order) {\n  return ((order && order.items) || []).map(\n    (i) => `${i.qty} × ${i.variant} ${i.size} — ${copyMoney(Number(i.unit_price) * Number(i.qty), order.currency)}`,\n  );\n}\n\nfunction copyItems(order) {\n  return ((order && order.items) || []).map((i) => `${i.qty} × ${i.variant} ${i.size}`).join(', ');\n}\n\nfunction firstName(name) {\n  return String(name || '').trim().split(/\\s+/)[0] || '';\n}\n\nfunction customerLabel(customer) {\n  const c = customer || {};\n  const name = c.display_name || c.name || c.profile_name || 'Customer';\n  const contact = c.wa_id ? `+${c.wa_id}` : 'number hidden';\n  return `${name} (${contact})`;\n}\n\nfunction mapsLink(location) {\n  if (!location || !Number.isFinite(Number(location.latitude))) return null;\n  return `https://maps.google.com/?q=${Number(location.latitude)},${Number(location.longitude)}`;\n}\n\nconst copy = {\n  aiDisclosure(brand) {\n    return `_I'm the ${brand.shortName} assistant, an AI. Type *human* anytime to reach the team._`;\n  },\n\n  paymentInstructions(order, momo) {\n    if (!momo || !momo.number) {\n      return \"We'll send you the Mobile Money details in a moment. 🙏\";\n    }\n    return [\n      'Pay with Mobile Money:',\n      `• Number: *${momo.number}*`,\n      `• Name: ${momo.name}`,\n      `• Reference: *${order.code}*`,\n      '',\n      'Then send a screenshot of the payment confirmation here. 📸',\n    ].join('\\n');\n  },\n\n  orderReceived(order, momo, duplicate) {\n    const opener = duplicate\n      ? `You already have order *${order.code}* waiting for payment, so here it is again:`\n      : order.customer_name\n        ? `Thanks, ${firstName(order.customer_name)}! 🧡 Here's your order:`\n        : \"Thanks for your order! 🧡 Here's what you picked:\";\n    return [\n      opener,\n      '',\n      `*Order ${order.code}*`,\n      ...copyLines(order),\n      `*Total: ${copyMoney(order.total, order.currency)}*`,\n      '',\n      copy.paymentInstructions(order, momo),\n    ].join('\\n');\n  },\n\n  orderButtons(order) {\n    return [\n      { id: `cust:cancel:${order.id}`, title: 'Cancel order' },\n      { id: 'cust:human', title: 'Talk to a person' },\n    ];\n  },\n\n  orderInvalid(result, siteUrl) {\n    const options = (result && result.options) || [];\n    switch (result && result.error) {\n      case 'unknown_variant':\n        return `I couldn't find that flavour. We have ${options.join(', ')}. Could you send the order again?`;\n      case 'unknown_size':\n        return `We have ${options.join(', ')} bottles. Could you send the order again with one of those sizes?`;\n      case 'bad_qty':\n        return `You can order 1 to ${result.max} bottles at a time. Planning something bigger? Tell me about your event and I'll pass it to the team. 🎉`;\n      case 'catalog_unavailable':\n        return 'Sorry, our menu is updating right now. Please try again in a few minutes. 🙏';\n      default:\n        return copy.orderHelp(siteUrl);\n    }\n  },\n\n  orderHelp(siteUrl) {\n    return [\n      \"I couldn't read that order. The easiest way is the *Order* button on our site:\",\n      `${siteUrl}/#order`,\n      '',\n      'Or send it like this:',\n      'Order: Cinnamon 500ml x2',\n      'Name: Your name',\n    ].join('\\n');\n  },\n\n  paymentReceived(order, verdict) {\n    if (verdict === 'unreadable') {\n      return `Thanks! I couldn't read that screenshot clearly, so I've passed it to the team to check for *${order.code}*. If you have a clearer one, send it here.`;\n    }\n    return `Thanks! 🙏 We're confirming your payment for *${order.code}* now. You'll get a message as soon as it's approved.`;\n  },\n\n  unsupportedReceipt() {\n    return 'Thanks! Please send the payment confirmation as a *photo or screenshot* so I can read it. 📸';\n  },\n\n  paymentApproved(order) {\n    const name = firstName(order.customer_name);\n    return [\n      `Payment confirmed ✅ Thank you${name ? `, ${name}` : ''}!`,\n      '',\n      `Please share your *delivery location* 📍 so we can bring order *${order.code}* to you. Add a landmark if it's hard to find.`,\n    ].join('\\n');\n  },\n\n  paymentRejected(order, momo) {\n    return [\n      `We couldn't confirm the payment for *${order.code}* yet.`,\n      `Please check that you sent *${copyMoney(order.total, order.currency)}* to *${momo.number}* (${momo.name}), then send a new screenshot.`,\n      '',\n      'Reply *human* if you need help.',\n    ].join('\\n');\n  },\n\n  locationSaved(order) {\n    return `Got it 📍 We'll deliver order *${order.code}* soon and message you when it's on the way.`;\n  },\n\n  outForDelivery(order) {\n    return `Your order *${order.code}* is on the way 🛵`;\n  },\n\n  delivered(order) {\n    return `Delivered ✅ Enjoy your mashkey! 🧡 We'd love to hear what you think of *${copyItems(order)}*.`;\n  },\n\n  cancelled(order, siteUrl) {\n    return `Order *${order.code}* is cancelled. Whenever you're ready, you can order again: ${siteUrl}/#order`;\n  },\n\n  nothingToCancel() {\n    return \"You don't have an unpaid order to cancel. 🙂\";\n  },\n\n  reminder(order, momo) {\n    const name = firstName(order.customer_name);\n    return [\n      `Hi${name ? ` ${name}` : ''}! Your order *${order.code}* (${copyMoney(order.total, order.currency)}) is still waiting for payment.`,\n      '',\n      copy.paymentInstructions(order, momo),\n      '',\n      'Changed your mind? Reply *cancel*.',\n    ].join('\\n');\n  },\n\n  voiceNote() {\n    return \"Sorry, I can't listen to voice notes yet 🙏 Please type your message, or type *human* to reach the team.\";\n  },\n\n  unsupportedMedia() {\n    return 'Thanks! I can read text, payment screenshots and locations for now. Please type your message. 🙂';\n  },\n\n  optedOut() {\n    return \"Done. We won't send you reminders or updates you didn't ask for. You can still message us anytime; reply *START* to turn updates back on.\";\n  },\n\n  optedIn() {\n    return 'Welcome back! 🧡 Updates are on again.';\n  },\n\n  humanRequested(existing) {\n    return existing\n      ? \"The team already knows you'd like to talk. Someone will reply here soon. 🙏\"\n      : \"I've let the team know. Someone will reply here shortly. 🙏\";\n  },\n\n  takeoverStarted(brand) {\n    return `You're now chatting with the ${brand.shortName} team 👋`;\n  },\n\n  takeoverEnded(brand) {\n    return `Thanks for chatting with us! 🧡 The ${brand.shortName} assistant is back. Message anytime.`;\n  },\n\n  agentFallback() {\n    return \"Sorry, I'm having a little trouble right now. I've told the team and someone will reply soon. 🙏\";\n  },\n\n  // ─── owner-facing ───────────────────────────────────────────────────────────────────────\n\n  ownerPaymentReview({ order, customer, extraction, precheck }) {\n    const e = extraction || {};\n    const c = precheck.checks;\n    const seen = [\n      typeof e.amount === 'number' ? copyMoney(e.amount, 'GHS') : 'no amount',\n      e.recipient_name || e.recipient_number ? `to ${[e.recipient_name, e.recipient_number].filter(Boolean).join(' ')}` : null,\n      e.transaction_id ? `Txn ${e.transaction_id}` : null,\n      e.transaction_time || null,\n    ].filter(Boolean).join(' · ');\n    const marks =\n      precheck.verdict === 'unreadable'\n        ? '⚠️ AI could not read this screenshot'\n        : [\n            `${c.amount === 'match' ? '✅' : '⚠️'} amount`,\n            `${c.recipient === 'match' ? '✅' : '⚠️'} recipient`,\n            `${c.txn === 'present' && !c.txn_reused_by ? '✅' : '⚠️'} transaction ID`,\n            `${c.image_reused_by || c.tampering.length ? '⚠️' : '✅'} image`,\n          ].join('  ');\n    return [\n      `💰 *Payment check: ${order.code}*`,\n      customerLabel(customer),\n      copyItems(order),\n      `Expected: *${copyMoney(order.total, order.currency)}*`,\n      precheck.verdict === 'unreadable' ? null : `Screenshot: ${seen}`,\n      '',\n      marks,\n      ...precheck.flags.slice(0, 4).map((f) => `• ${f}`),\n      '',\n      '_Check your MoMo balance before approving._',\n    ].filter((line) => line !== null).join('\\n');\n  },\n\n  ownerPaymentButtons(paymentId) {\n    return [\n      { id: `pay:approve:${paymentId}`, title: '✅ Approve' },\n      { id: `pay:reject:${paymentId}`, title: '❌ Reject' },\n    ];\n  },\n\n  ownerDecision(result) {\n    const order = result.order || {};\n    const name = firstName(order.customer_name) || 'the customer';\n    if (!result.ok) {\n      switch (result.error) {\n        case 'already_decided':\n          return `${order.code || 'That payment'} was already handled (${result.status}).`;\n        case 'txn_already_used':\n          return `⚠️ Not approved: that transaction ID was already used for order ${result.other_order}. Check your MoMo statement.`;\n        case 'order_not_in_review':\n          return `${order.code} is no longer waiting for a payment check (status: ${order.status}).`;\n        default:\n          return \"⚠️ I couldn't update that payment. Please try again.\";\n      }\n    }\n    return result.decision === 'approve'\n      ? `✅ ${order.code} marked paid. I've asked ${name} for the delivery location.`\n      : `❌ ${order.code}: payment rejected. I've asked ${name} to check and resend.`;\n  },\n\n  ownerHumanAlert({ customer, reason, lastMessage }) {\n    return [\n      `🙋 *${customerLabel(customer)}* would like to talk to someone.`,\n      reason ? `Why: ${reason}` : null,\n      lastMessage ? `Last message: “${String(lastMessage).slice(0, 300)}”` : null,\n    ].filter(Boolean).join('\\n');\n  },\n\n  ownerLeadAlert({ customer, lead }) {\n    return [\n      '🎉 *Bulk / event order lead*',\n      customerLabel(customer),\n      [lead.event_type, lead.event_date].filter(Boolean).join(' · ') || null,\n      lead.quantity_estimate ? `About ${lead.quantity_estimate} bottles` : null,\n      lead.area ? `Area: ${lead.area}` : null,\n      lead.flavours ? `Flavours: ${lead.flavours}` : null,\n      lead.notes ? `Notes: ${lead.notes}` : null,\n    ].filter(Boolean).join('\\n');\n  },\n\n  ownerEscalationButtons(escalationId) {\n    return [\n      { id: `esc:take:${escalationId}`, title: 'Take over chat' },\n      { id: `esc:dismiss:${escalationId}`, title: 'Dismiss' },\n    ];\n  },\n\n  ownerOrderReady({ order, customer }) {\n    const link = mapsLink(order.delivery_location);\n    return [\n      `📦 *${order.code} ready for delivery*`,\n      `${copyItems(order)} · ${copyMoney(order.total, order.currency)} (paid)`,\n      customerLabel(customer),\n      link ? `📍 ${link}` : null,\n      order.delivery_location && order.delivery_location.address ? order.delivery_location.address : null,\n      order.delivery_note ? `Note: ${order.delivery_note}` : null,\n    ].filter(Boolean).join('\\n');\n  },\n\n  ownerOrderButtons(orderId) {\n    return [\n      { id: `ord:out:${orderId}`, title: '🛵 On the way' },\n      { id: `ord:done:${orderId}`, title: '✅ Delivered' },\n    ];\n  },\n\n  ownerAdvanced(result) {\n    const order = result.order || {};\n    if (!result.ok) return `${order.code || 'That order'} can't move to that step (status: ${order.status || 'unknown'}).`;\n    return order.status === 'delivered'\n      ? `✅ ${order.code} delivered. The customer has been told.`\n      : `🛵 ${order.code} is on the way. The customer has been told.`;\n  },\n\n  ownerTakeoverStarted(customer) {\n    return `You're now chatting with *${customerLabel(customer)}* through the business number. Type here and I'll forward it. Send */done* when you're finished (it ends by itself after 30 quiet minutes).`;\n  },\n\n  ownerTakeoverEnded(customer) {\n    return `Chat with ${customerLabel(customer)} closed. The assistant is back on.`;\n  },\n\n  ownerRelay(customer, text) {\n    return `💬 *${(customer && (customer.display_name || customer.name)) || 'Customer'}:* ${text}`;\n  },\n\n  ownerRelayFailed(customer) {\n    return `⚠️ Couldn't deliver that. ${customerLabel(customer)} hasn't messaged in 24 hours, so WhatsApp blocks free-form replies. Please call them instead.`;\n  },\n\n  ownerNoSession() {\n    return 'No chat is open. Tap *Take over chat* on an alert to talk to a customer. Send */help* for commands.';\n  },\n\n  ownerHelp() {\n    return [\n      '*Mash & Sip assistant: owner help*',\n      '• Tap the buttons on alerts to approve payments, take over chats or update deliveries.',\n      '• */done*: end the current chat takeover.',\n      '• */help*: show this message.',\n    ].join('\\n');\n  },\n\n  ownerMediaNotRelayed() {\n    return 'Only text can be forwarded for now. Please type your message.';\n  },\n};\n\n// ── src/lib/templates.js ──\n// WhatsApp message templates: the only way to message someone whose 24-hour customer-service\n// window is closed. Owner alerts use them whenever the owner hasn't messaged the bot in the last\n// day. The definitions to submit to Meta are in templates/whatsapp-templates.json; the parameter\n// counts here must match (tests/unit/templates.test.js checks this).\n//\n// Inlined into n8n Code nodes after wa.js (uses waTemplate / waTemplateText).\n/* global waTemplate, waTemplateText */\n\nconst TEMPLATE = {\n  paymentCheck: 'payment_check',\n  ownerAlert: 'owner_alert',\n  orderReady: 'order_ready',\n  paymentConfirmed: 'payment_confirmed',\n  paymentNotConfirmed: 'payment_not_confirmed',\n  orderOnTheWay: 'order_on_the_way',\n  orderDelivered: 'order_delivered',\n};\n\nfunction tplBody(values) {\n  return { type: 'body', parameters: values.map((v) => waTemplateText(v)) };\n}\n\nfunction tplQuickReplies(payloads) {\n  return payloads.map((payload, i) => ({\n    type: 'button',\n    sub_type: 'quick_reply',\n    index: String(i),\n    parameters: [{ type: 'payload', payload }],\n  }));\n}\n\n// Owner: screenshot + summary + Approve / Reject.\nfunction tplPaymentCheck(r, lang, { imageId, orderCode, customer, expected, precheck, paymentId }) {\n  return waTemplate(r, TEMPLATE.paymentCheck, lang, [\n    { type: 'header', parameters: [{ type: 'image', image: { id: imageId } }] },\n    tplBody([orderCode, customer, expected, precheck]),\n    ...tplQuickReplies([`pay:approve:${paymentId}`, `pay:reject:${paymentId}`]),\n  ]);\n}\n\n// Owner: someone wants a person / a bulk-order lead / a message during a takeover.\nfunction tplOwnerAlert(r, lang, { what, customer, details, escalationId }) {\n  return waTemplate(r, TEMPLATE.ownerAlert, lang, [\n    tplBody([what, customer, details]),\n    ...tplQuickReplies([`esc:take:${escalationId}`, `esc:dismiss:${escalationId}`]),\n  ]);\n}\n\n// Owner: paid order with delivery details.\nfunction tplOrderReady(r, lang, { orderCode, items, customer, location, orderId }) {\n  return waTemplate(r, TEMPLATE.orderReady, lang, [\n    tplBody([orderCode, items, customer, location]),\n    ...tplQuickReplies([`ord:out:${orderId}`, `ord:done:${orderId}`]),\n  ]);\n}\n\n// Customer updates: name + order code.\nfunction tplCustomerUpdate(r, lang, name, firstName, orderCode) {\n  return waTemplate(r, name, lang, [tplBody([firstName || 'there', orderCode])]);\n}\n\n// ── node logic ──\nconst order = $('Save note').first().json.result.order;\nconst { owner, customer, settings } = $input.first().json;\nif (!owner) return [{ json: { nothing: true } }];\nconst lang = (settings.whatsapp && settings.whatsapp.template_language) || 'en';\nconst to = waRecipientOf(owner);\nreturn [{ json: waSendRequest(owner,\n  [waButtons(to, copy.ownerOrderReady({ order, customer }), copy.ownerOrderButtons(order.id))],\n  tplOrderReady(to, lang, { orderCode: order.code, items: copyItems(order), customer: customerLabel(customer), location: order.delivery_note || 'see chat', orderId: order.id }),\n  settings) }];\n"
+      },
+      "id": "5daf1c08-0d89-57d1-afe2-453eb6d6d832",
+      "name": "Compose",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "MsWaSend00000001"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "581e0886-578d-5023-a2e8-a75b093da3b9",
+      "name": "Send",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── node logic ──\nconst r = $('Save note').first().json.result;\nreturn [{ json: r.ok\n  ? { ok: true, order: r.order.code, note: 'Saved. Tell the customer the team has their delivery details.' }\n  : { ok: false, error: r.error, note: 'No paid order is waiting for delivery details; explain that payment must be confirmed first.' } }];\n"
+      },
+      "id": "5475508a-f0bc-5a82-a73c-7619fbe35bc4",
+      "name": "Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Save note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save note": {
+      "main": [
+        [
+          {
+            "node": "Saved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Saved?": {
+      "main": [
+        [
+          {
+            "node": "Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Context": {
+      "main": [
+        [
+          {
+            "node": "Compose",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose": {
+      "main": [
+        [
+          {
+            "node": "Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "MsErrors00000001",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

@@ -1,0 +1,203 @@
+{
+  "id": "MsErrors00000001",
+  "name": "Ops · Errors",
+  "description": "Error workflow: logs failures and alerts the developer.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b19ccc2c-11be-5ff1-a63b-5ae64909b211",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ── node logic ──\nconst e = $input.first().json;\nconst execution = e.execution || {};\nconst err = execution.error || {};\nconst workflow = (e.workflow && e.workflow.name) || 'unknown workflow';\n// Error messages can quote message content; keep them short.\nconst message = String(err.message || 'Unknown error').slice(0, 300);\nreturn [{ json: {\n  event: { level: 'error', source: workflow, message,\n    details: { execution_id: execution.id || null, url: execution.url || null, node: execution.lastNodeExecuted || null } },\n  text: '⚠️ n8n: ' + workflow + ' failed at ' + (execution.lastNodeExecuted || '?') + ': ' + message + (execution.url ? ' ' + execution.url : ''),\n} }];\n"
+      },
+      "id": "90528acd-5833-5f05-ad29-8584fc69b24f",
+      "name": "Describe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select crm.log_event($1::jsonb) as result",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.event) ] }}"
+        }
+      },
+      "id": "cbe4c970-e0cf-52d0-a363-7f88579f57f9",
+      "name": "Log error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        560,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MsCredPostgres01",
+          "name": "Mash & Sip CRM (bot role)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select crm.get_settings() as settings",
+        "options": {}
+      },
+      "id": "b645be7d-e172-57b3-a133-55da46d198b2",
+      "name": "Settings",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        840,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MsCredPostgres01",
+          "name": "Mash & Sip CRM (bot role)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "8f712037-0cc3-54be-a405-c4ba9d9798ad",
+              "leftValue": "={{ Boolean(($json.settings.alerts || {}).webhook_url) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "19818ff9-8ab6-56ce-abef-8fdc5c1a538d",
+      "name": "Alert webhook set?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.settings.alerts.webhook_url }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $('Describe').first().json.text, content: $('Describe').first().json.text }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "45dd6913-fa80-500a-ae93-0cc0b6a65c15",
+      "name": "Alert developer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1400,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Describe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Describe": {
+      "main": [
+        [
+          {
+            "node": "Log error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log error": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Alert webhook set?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert webhook set?": {
+      "main": [
+        [
+          {
+            "node": "Alert developer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

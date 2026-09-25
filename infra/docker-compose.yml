@@ -1,0 +1,138 @@
+# Mash & Sip WhatsApp agent — production stack (Oracle Cloud Always Free, Ampere A1 / arm64).
+#
+#   Internet ─▶ caddy :443 (TLS, only /webhook/whatsapp + /healthz)
+#                  └─▶ gate :8080 (Meta signature check) ─▶ n8n :5678 ─▶ postgres :5432
+#
+# * n8n's editor is bound to 127.0.0.1 on the VM: reach it through an SSH tunnel
+#   (ssh -L 5678:127.0.0.1:5678 ubuntu@<vm>), never from the internet.
+# * postgres and the gate↔n8n link live on an internal network with no internet access; only n8n
+#   (WhatsApp/Anthropic APIs) and caddy (Let's Encrypt) can reach out.
+# * Images are pinned. Update deliberately (docs/runbook.md), n8n security releases first.
+
+name: mashsip
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set in .env}
+      N8N_DB_PASSWORD: ${N8N_DB_PASSWORD:?set in .env}
+      CRM_ADMIN_PASSWORD: ${CRM_ADMIN_PASSWORD:?set in .env}
+      CRM_BOT_PASSWORD: ${CRM_BOT_PASSWORD:?set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../db:/mashsip-db:ro
+      - ./postgres/10-init-mashsip.sh:/docker-entrypoint-initdb.d/10-init-mashsip.sh:ro
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  n8n:
+    image: n8nio/n8n:2.40.7
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports:
+      - "127.0.0.1:5678:5678" # editor: SSH tunnel only
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD}
+      # Back this up (docs/runbook.md). Without it, every saved credential is unreadable.
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?set in .env}
+      N8N_LISTEN_ADDRESS: 0.0.0.0
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      N8N_HOST: localhost
+      N8N_EDITOR_BASE_URL: http://localhost:5678
+      WEBHOOK_URL: http://n8n:5678/
+      N8N_SECURE_COOKIE: "false" # editor is only served over the SSH tunnel on localhost
+      GENERIC_TIMEZONE: Africa/Accra
+      TZ: Africa/Accra
+      # attack-surface reduction
+      N8N_PUBLIC_API_DISABLED: "true"
+      N8N_COMMUNITY_PACKAGES_ENABLED: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+      NODES_EXCLUDE: '["n8n-nodes-base.executeCommand","n8n-nodes-base.localFileTrigger","n8n-nodes-base.ssh","n8n-nodes-base.form","n8n-nodes-base.formTrigger"]'
+      # workflows may not call private addresses (e.g. the cloud metadata service at 169.254.169.254)
+      N8N_SSRF_PROTECTION_ENABLED: "true"
+      N8N_RUNNERS_ENABLED: "true"
+      # privacy: execution data holds customer messages; keep 7 days
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+      EXECUTIONS_DATA_PRUNE_MAX_COUNT: "20000"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_TEMPLATES_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "true"
+    volumes:
+      - n8ndata:/home/node/.n8n
+      - ../workflows:/opt/mashsip/workflows:ro
+      - ../scripts:/opt/mashsip/scripts:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks: [backend, egress]
+
+  gate:
+    build: ../gate
+    image: mashsip-gate:local
+    restart: unless-stopped
+    logging: *logging
+    depends_on: [n8n]
+    environment:
+      META_APP_SECRET: ${META_APP_SECRET:?set in .env}
+      META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:?set in .env}
+      N8N_GATE_TOKEN: ${N8N_GATE_TOKEN:?set in .env}
+      N8N_WEBHOOK_URL: http://n8n:5678/webhook/wa-inbound
+      N8N_HEALTH_URL: http://n8n:5678/healthz
+      FORWARD_STATUSES: failed
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [edge, backend]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    logging: *logging
+    depends_on: [gate]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?set in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+
+networks:
+  edge: {}
+  backend:
+    internal: true
+  egress: {}
+
+volumes:
+  pgdata: {}
+  n8ndata: {}
+  caddy_data: {}
+  caddy_config: {}
