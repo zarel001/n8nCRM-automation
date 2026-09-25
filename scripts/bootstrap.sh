@@ -2,13 +2,17 @@
 # First-time setup (safe to re-run): start the database and n8n, load credentials from
 # infra/.env, import every workflow, publish them, then start the gate and Caddy.
 #   ./scripts/bootstrap.sh
+# Local runs (scripts/local.mjs) reuse it with ENV_FILE, EDGE_SERVICES and the standard
+# COMPOSE_FILE / COMPOSE_PROFILES / COMPOSE_PROJECT_NAME variables.
 set -euo pipefail
 
 cd "$(dirname "$0")/../infra"
-[ -f .env ] || { echo "infra/.env is missing (copy .env.example)"; exit 1; }
-set -a; . ./.env; set +a
+ENV_FILE="${ENV_FILE:-.env}"
+EDGE_SERVICES="${EDGE_SERVICES:-gate caddy}"
+[ -f "$ENV_FILE" ] || { echo "infra/$ENV_FILE is missing (copy .env.example)"; exit 1; }
+set -a; . "./$ENV_FILE"; set +a
 
-compose() { docker compose "$@"; }
+compose() { docker compose --env-file "$ENV_FILE" "$@"; }
 n8n_cli() { compose exec -T -e N8N_RUNNERS_BROKER_PORT=5690 n8n "$@"; }
 
 echo "▸ starting postgres + n8n"
@@ -19,7 +23,7 @@ echo "▸ database migrations"
 compose exec -T postgres /mashsip-db/migrate.sh
 
 echo "▸ n8n credentials (encrypted with N8N_ENCRYPTION_KEY)"
-compose exec -T -e CRM_BOT_PASSWORD -e WHATSAPP_ACCESS_TOKEN -e WHATSAPP_WABA_ID -e ANTHROPIC_API_KEY -e N8N_GATE_TOKEN \
+compose exec -T -e CRM_BOT_PASSWORD -e WHATSAPP_ACCESS_TOKEN -e WHATSAPP_WABA_ID -e ANTHROPIC_API_KEY -e ANTHROPIC_BASE_URL -e N8N_GATE_TOKEN \
   n8n node /opt/mashsip/scripts/credentials.mjs /tmp/credentials.json
 trap 'compose exec -T n8n rm -f /tmp/credentials.json >/dev/null 2>&1 || true' EXIT
 n8n_cli n8n import:credentials --input=/tmp/credentials.json
@@ -37,8 +41,9 @@ done
 compose restart n8n
 until compose exec -T n8n wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1; do sleep 3; done
 
-echo "▸ gate + caddy"
-compose up -d --build gate caddy
+echo "▸ $EDGE_SERVICES"
+# shellcheck disable=SC2086 # word splitting intended
+compose up -d --build $EDGE_SERVICES
 
 echo
 echo "Done. Next:"

@@ -1,5 +1,7 @@
-// In-process stand-ins for the WhatsApp Cloud API (Graph), the Anthropic Messages API, the
-// storefront catalog and the alert webhook, so the real n8n workflows can run end to end.
+// Stand-ins for the WhatsApp Cloud API (Graph), the Anthropic Messages API, the storefront
+// catalog and the alert webhook, so the real n8n workflows can run end to end. Used in-process by
+// the e2e tests, and as a container by `npm run demo` (scripts/local/mock-server.mjs), which turns
+// on the HTTP control routes (/_log, /_script, /_reset) and a scripted stand-in for Claude.
 const http = require('node:http');
 
 // 1×1 white JPEG
@@ -8,7 +10,7 @@ const TINY_JPEG = Buffer.from(
   'base64',
 );
 
-function createMockApis() {
+function createMockApis({ control = false, brain = null } = {}) {
   const log = [];
   let outId = 0;
   let uploadId = 0;
@@ -51,6 +53,19 @@ function createMockApis() {
           body = raw.toString('utf8');
         }
       }
+      if (control && url.pathname.startsWith('/_')) {
+        if (url.pathname === '/_log' && req.method === 'GET') return json(res, 200, log.map(({ headers, ...e }) => e));
+        if (url.pathname === '/_reset' && req.method === 'POST') {
+          reset();
+          return json(res, 200, { ok: true });
+        }
+        if (url.pathname === '/_script' && req.method === 'POST') {
+          for (const k of ['extraction', 'chat', 'chatFallback', 'failNext']) if (body && k in body) anthropic[k] = body[k];
+          return json(res, 200, { ok: true });
+        }
+        return json(res, 404, { error: 'mock: no control route' });
+      }
+
       const entry = { method: req.method, path: url.pathname, headers: req.headers, body, size: raw.length, at: Date.now() };
       log.push(entry);
 
@@ -95,7 +110,7 @@ function createMockApis() {
           return json(res, 200, anthropicMessage([{ type: 'thinking', thinking: '', signature: 'x' }, { type: 'text', text: JSON.stringify(anthropic.extraction) }]));
         }
         entry.kind = 'chat';
-        const step = anthropic.chat.length ? anthropic.chat.shift() : anthropic.chatFallback;
+        const step = anthropic.chat.length ? anthropic.chat.shift() : anthropic.chatFallback || brain;
         const content = typeof step === 'function' ? step(body) : step;
         if (!content) return json(res, 200, anthropicMessage([{ type: 'text', text: 'NO_REPLY' }]));
         const stop = content.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn';
@@ -111,6 +126,14 @@ function createMockApis() {
     });
   });
 
+  function reset() {
+    log.length = 0;
+    anthropic.extraction = null;
+    anthropic.chat = [];
+    anthropic.chatFallback = null;
+    anthropic.failNext = 0;
+  }
+
   return {
     server,
     log,
@@ -118,13 +141,7 @@ function createMockApis() {
     catalog,
     listen: (port) => new Promise((r) => server.listen(port, '0.0.0.0', r)),
     close: () => new Promise((r) => server.close(r)),
-    reset() {
-      log.length = 0;
-      anthropic.extraction = null;
-      anthropic.chat = [];
-      anthropic.chatFallback = null;
-      anthropic.failNext = 0;
-    },
+    reset,
     sent: () => log.filter((e) => /\/messages$/.test(e.path) && e.method === 'POST' && e.body && e.body.messaging_product && !e.body.status).map((e) => e.body),
     typing: () => log.filter((e) => e.body && e.body.status === 'read'),
     chatRequests: () => log.filter((e) => e.kind === 'chat').map((e) => e.body),

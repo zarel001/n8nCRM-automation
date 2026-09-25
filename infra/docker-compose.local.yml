@@ -1,0 +1,37 @@
+# Local development overlay (your laptop, not the VM). Used by scripts/local.mjs:
+#
+#   npm run demo           → postgres + n8n + gate + mock (WhatsApp and Claude simulated)
+#   npm run local:whatsapp → postgres + n8n + gate + tunnel (real Meta test number + real Claude)
+#
+# Caddy isn't needed locally: the Cloudflare quick tunnel provides HTTPS for Meta.
+
+services:
+  caddy:
+    profiles: [prod]
+
+  gate:
+    ports:
+      - "127.0.0.1:8080:8080" # lets the demo post signed webhooks from your machine
+
+  n8n:
+    environment:
+      N8N_SSRF_ALLOWED_HOSTNAMES: mock
+
+  mock:
+    profiles: [demo]
+    image: node:22-alpine
+    working_dir: /app
+    command: ["node", "scripts/local/mock-server.mjs"]
+    volumes:
+      - ../tests/e2e:/app/tests/e2e:ro
+      - ../scripts/local:/app/scripts/local:ro
+    ports:
+      - "127.0.0.1:55999:55999" # control API for the demo driver
+    networks: [backend, edge]
+
+  tunnel:
+    profiles: [whatsapp]
+    image: cloudflare/cloudflared:2026.9.3
+    command: ["tunnel", "--no-autoupdate", "--url", "http://gate:8080"]
+    depends_on: [gate]
+    networks: [edge]

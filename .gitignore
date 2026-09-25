@@ -3,5 +3,7 @@ node_modules/
 *.env
 !.env.example
 infra/.env
+infra/.env.*
+!infra/.env.example
 backups/
 .DS_Store

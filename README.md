@@ -44,6 +44,15 @@ Every hour: sync the catalog from the storefront, send one payment reminder (onl
 | `templates/` | WhatsApp message templates to submit to Meta |
 | `tests/` | Unit, database (as the restricted role) and end-to-end (real n8n + mocked Meta/Claude) |
 
+## Run it locally
+
+Windows (WSL2 + Docker Desktop + VS Code), macOS or Linux: [docs/local.md](docs/local.md).
+
+```bash
+npm run demo             # no accounts: WhatsApp and Claude simulated, plays a full customer journey
+npm run local:whatsapp   # Meta's free test number + real Claude, through a temporary Cloudflare tunnel
+```
+
 ## Tests
 
 ```bash

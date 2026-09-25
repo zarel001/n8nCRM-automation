@@ -1,0 +1,15 @@
+{
+  // Terminal → Run Task… (see docs/local.md)
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "Demo: run", "type": "npm", "script": "demo", "problemMatcher": [] },
+    { "label": "Demo: stop", "type": "npm", "script": "demo:stop", "problemMatcher": [] },
+    { "label": "Demo: reset (deletes local data)", "type": "npm", "script": "demo:reset", "problemMatcher": [] },
+    { "label": "WhatsApp test: start", "type": "npm", "script": "local:whatsapp", "problemMatcher": [] },
+    { "label": "WhatsApp test: stop", "type": "npm", "script": "local:stop", "problemMatcher": [] },
+    { "label": "Build workflows", "type": "npm", "script": "build", "group": { "kind": "build", "isDefault": true }, "problemMatcher": [] },
+    { "label": "Tests: unit", "type": "npm", "script": "test", "group": { "kind": "test", "isDefault": true }, "problemMatcher": [] },
+    { "label": "Tests: database", "type": "npm", "script": "test:db", "group": "test", "problemMatcher": [] },
+    { "label": "Tests: end-to-end", "type": "npm", "script": "test:e2e", "group": "test", "problemMatcher": [] }
+  ]
+}
