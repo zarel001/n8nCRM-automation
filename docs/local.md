@@ -118,8 +118,8 @@ The two modes use the same ports, so starting one stops the other.
 - To change the bot, edit `src/` or `prompts/`, run `npm run build`, then run `npm run demo` or `npm run local:whatsapp`. Both re-import every workflow. Don't edit workflows in the n8n editor, because the next import overwrites them.
 - Tests:
   - `npm test && npm run check` takes seconds.
-  - `npm run test:db` takes about 30 seconds.
-  - `npm run test:e2e` takes about 4 minutes. Run `npm run demo:stop` first, because both use port 55999.
+  - `npm run test:db` takes under a minute.
+  - `npm run test:e2e` takes about 3–4 minutes. Run `npm run demo:stop` first, because both use port 55999.
 - **Database:** `docker exec -it mashsip-demo-postgres-1 psql -U postgres -d mashsip` opens it (use `mashsip-local-…` in WhatsApp mode). Then try:
   ```sql
   select * from crm.v_orders;

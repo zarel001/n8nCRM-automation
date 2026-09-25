@@ -45,8 +45,13 @@ echo "▸ $EDGE_SERVICES"
 # shellcheck disable=SC2086 # word splitting intended
 compose up -d --build $EDGE_SERVICES
 
-echo
-echo "Done. Next:"
-echo "  • Fill in settings:   docker compose exec postgres psql -U postgres -d mashsip -c \"select crm.config_problems()\""
-echo "  • Meta webhook URL:   https://${PUBLIC_HOST}/webhook/whatsapp   (verify token = META_VERIFY_TOKEN)"
-echo "  • Editor (tunnel):    ssh -L 5678:127.0.0.1:5678 <user>@<vm>  →  http://localhost:5678"
+# Local runs (no Caddy) print their own next steps.
+case " $EDGE_SERVICES " in
+  *" caddy "*)
+    echo
+    echo "Done. Next:"
+    echo "  • Fill in settings:   docker compose exec postgres psql -U postgres -d mashsip -c \"select crm.config_problems()\""
+    echo "  • Meta webhook URL:   https://${PUBLIC_HOST}/webhook/whatsapp   (verify token = META_VERIFY_TOKEN)"
+    echo "  • Editor (tunnel):    ssh -L 5678:127.0.0.1:5678 <user>@<vm>  →  http://localhost:5678"
+    ;;
+esac
