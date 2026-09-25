@@ -24,7 +24,6 @@ Everything runs inside WSL2 (Ubuntu on Windows), and VS Code connects to it.
    gh auth login                                  # GitHub.com → HTTPS → log in with a browser
    gh repo clone zarel001/n8nCRM-automation ~/n8nCRM-automation
    cd ~/n8nCRM-automation
-   git checkout claude/dazzling-feynman-7318ra    # until PR #1 is merged
    npm ci
    code .
    ```
@@ -93,6 +92,7 @@ Use a separate Meta app for local testing. An app has only one webhook URL, so s
    | `WHATSAPP_WABA_ID`, `WHATSAPP_PHONE_NUMBER_ID` | *WhatsApp → API Setup* |
    | `ANTHROPIC_API_KEY` | console.anthropic.com → *API keys* |
    | `OWNER_WA_ID` | The owner's phone: digits with the country code, e.g. `233241234567` |
+   | `MOMO_NUMBER`, `MOMO_NAME` | Optional. Where test customers are told to pay. The default number is a placeholder, so nobody pays a live account while testing |
 3. Run `npm run local:whatsapp` again. It prints:
    ```
    Callback URL:  https://<random-words>.trycloudflare.com/webhook/whatsapp

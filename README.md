@@ -65,11 +65,11 @@ npm run test:e2e    # 15 scenarios through gate → n8n 2.40.7 → Postgres, Met
 
 ## Deploy
 
-[docs/setup.md](docs/setup.md): Oracle VM → Meta app (test number first) → secrets + `./scripts/bootstrap.sh` → webhook → settings → templates → test → go live with 055 886 6617. Operations: [docs/runbook.md](docs/runbook.md).
+[docs/setup.md](docs/setup.md): Oracle VM → Meta app (test number) → secrets + `./scripts/bootstrap.sh` → webhook → settings → templates → test. The bot stays on Meta's test number for now; going live on a real number is a later step ([§9](docs/setup.md#9-later-go-live-on-a-real-number)). Operations: [docs/runbook.md](docs/runbook.md).
 
 ## Decisions
 
-- **Official Cloud API only.** The existing number moves to the API at launch (no coexistence), so the owner uses her personal number for approvals and hand-offs.
+- **Official Cloud API, on Meta's free test number for now.** 055 886 6617 stays in the WhatsApp Business app until launch ([setup §9](docs/setup.md#9-later-go-live-on-a-real-number)), which moves it to the API for good (no coexistence). Either way, the owner approves payments and takes over chats from a personal number.
 - **The owner approves every payment.** Screenshots are easy to fake; the bot does the reading and checking, the owner taps.
 - **Claude `claude-opus-5`** for the agent (adaptive thinking, medium effort, prompt caching) and for reading screenshots. `claude-sonnet-5` costs about 60% less per token; change it on the *Claude* node and in `settings.ai.vision_model`.
 - **No vector database.** The FAQ fits in the prompt. Facts left empty in settings are never guessed; the agent hands off instead.
@@ -79,5 +79,5 @@ npm run test:e2e    # 15 scenarios through gate → n8n 2.40.7 → Postgres, Met
 | Item | Cost |
 |---|---|
 | Oracle Always Free (A1, 2 OCPU / 12 GB) | $0. Upgrade the account to Pay-As-You-Go (still $0 within free limits) so idle instances aren't reclaimed |
-| WhatsApp | From Oct 1, 2026: 1,000 free service messages per number per month, then Ghana's per-message rate; templates are billed per message |
+| WhatsApp | Test number: free, no payment method needed. On a real number from Oct 1, 2026: 1,000 free service messages per number per month, then Ghana's per-message rate; templates are billed per message |
 | Claude | Only AI work costs money: checkout messages, buttons and location pins are handled without it. Roughly $0.03–0.08 per agent reply and $0.02–0.04 per screenshot read on Opus 5; about 40% of that on Sonnet 5 |

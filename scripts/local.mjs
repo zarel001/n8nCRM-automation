@@ -19,7 +19,11 @@ const MODES = {
 };
 const GATE = 'http://127.0.0.1:8080/webhook/whatsapp';
 const MOCK = 'http://127.0.0.1:55999';
-const DEMO = { customer: '233241234567', customerName: 'Akosua', owner: '233200000001', phoneNumberId: '1234567890' };
+// Made-up numbers throughout: the demo never uses the storefront's real number.
+const DEMO = {
+  customer: '233241234567', customerName: 'Akosua', owner: '233200000001',
+  phoneNumberId: '1234567890', displayNumber: '15555550100', momo: '055 000 0000',
+};
 const GENERATED = ['POSTGRES_SUPERUSER_PASSWORD', 'N8N_DB_PASSWORD', 'CRM_ADMIN_PASSWORD', 'CRM_BOT_PASSWORD', 'N8N_ENCRYPTION_KEY', 'META_VERIFY_TOKEN', 'N8N_GATE_TOKEN', 'BACKUP_PASSPHRASE'];
 const LOCAL_EXTRAS = `
 # ── Local test settings (npm run local:whatsapp) ─────────────────────────────────────────────
@@ -28,8 +32,9 @@ WHATSAPP_PHONE_NUMBER_ID=
 # The owner's WhatsApp number for approvals/alerts, digits with country code (e.g. 233241234567).
 # Use a different phone to play the customer.
 OWNER_WA_ID=
+# Where test customers are told to pay. A placeholder, so nobody pays a live account while testing.
 # Values with spaces or & need quotes.
-MOMO_NUMBER="055 886 6617"
+MOMO_NUMBER="055 000 0000"
 MOMO_NAME="Mash & Sip Co."
 `;
 
@@ -154,7 +159,7 @@ async function send(appSecret, from, name, message) {
     object: 'whatsapp_business_account',
     entry: [{ id: 'WABA', changes: [{ field: 'messages', value: {
       messaging_product: 'whatsapp',
-      metadata: { display_phone_number: '233558866617', phone_number_id: DEMO.phoneNumberId },
+      metadata: { display_phone_number: DEMO.displayNumber, phone_number_id: DEMO.phoneNumberId },
       contacts: [{ profile: { name }, wa_id: from }],
       messages: [{ from, id: `wamid.demo.${Date.now()}.${++seq}`, timestamp: String(Math.floor(Date.now() / 1000)), ...message }],
     } }] }],
@@ -258,7 +263,7 @@ async function runDemo(env) {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ extraction: {
       is_payment_receipt: true, provider: 'MTN MoMo', status: 'successful', amount: total, currency: 'GHS',
-      recipient_name: 'MASH AND SIP', recipient_number: '0558866617', sender_name: 'AKOSUA MENSAH',
+      recipient_name: 'MASH AND SIP', recipient_number: DEMO.momo.replace(/ /g, ''), sender_name: 'AKOSUA MENSAH',
       transaction_id: `7${Date.now()}`.slice(0, 11), reference: code, transaction_time: new Date().toISOString().replace('T', ' ').slice(0, 16),
       legibility: 'clear', tampering_signs: [], notes: '',
     } }),
@@ -318,7 +323,7 @@ async function main() {
   if (cmd === 'demo') {
     applySettings('demo', {
       owner: { wa_id: DEMO.owner, name: 'Owner' },
-      momo: { number: '055 886 6617', name: 'Mash & Sip Co.', network: 'MTN MoMo' },
+      momo: { number: DEMO.momo, name: 'Mash & Sip Co.', network: 'MTN MoMo' },
       whatsapp: { graph_base_url: 'http://mock:55999', graph_version: 'v26.0', phone_number_id: DEMO.phoneNumberId, template_language: 'en' },
       ai: { vision_model: 'claude-opus-5', anthropic_base_url: 'http://mock:55999' },
       catalog_url: 'http://mock:55999/api/catalog',
