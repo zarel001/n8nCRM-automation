@@ -145,7 +145,7 @@ export class Workflow {
       let x = 0;
       for (const [parent, count] of subNodes) {
         const bandEnd = -120 + (count - 1) * 180 + 80; // right edge of the last sub-node, from the parent's x
-        if (visit(parent) < d) x += Math.max(0, bandEnd + 100 - 280); // keep a 100px gap; columns are 280 apart
+        if (visit(parent) < d) x += Math.max(0, bandEnd + 300 - 280); // keep a 300px gap; columns are 280 apart
       }
       return x;
     };
