@@ -116,7 +116,9 @@ export class Workflow {
     const incoming = new Map(this.nodes.map((n) => [n.name, []]));
     for (const [from, byType] of Object.entries(this.connections)) {
       for (const [type, outputs] of Object.entries(byType)) {
-        for (const targets of outputs) for (const t of targets) incoming.get(t.node).push({ from, type });
+        outputs.forEach((targets, output) => {
+          for (const t of targets) incoming.get(t.node).push({ from, type, output });
+        });
       }
     }
     const depth = new Map();
@@ -135,13 +137,43 @@ export class Workflow {
         if (type !== 'main') for (const t of outputs.flat()) aiParents.set(from, t.node);
       }
     }
-    const rows = new Map();
-    for (const n of this.nodes) {
-      if (n.type === TYPES.sticky[0] || aiParents.has(n.name)) continue;
+    // AI sub-nodes (model, tools) sit in a band under their parent, 180 apart from 120 to its left.
+    // Columns after that parent start past the band, so nothing is drawn on top of it.
+    const subNodes = new Map();
+    for (const parent of aiParents.values()) subNodes.set(parent, (subNodes.get(parent) ?? 0) + 1);
+    const shift = (d) => {
+      let x = 0;
+      for (const [parent, count] of subNodes) {
+        const bandEnd = -120 + (count - 1) * 180 + 80; // right edge of the last sub-node, from the parent's x
+        if (visit(parent) < d) x += Math.max(0, bandEnd + 100 - 280); // keep a 100px gap; columns are 280 apart
+      }
+      return x;
+    };
+    // Column by depth. Within a column, siblings are ordered like their parent's outputs (output 0
+    // on top), and each node stays in its parent's row when that slot is free, so a branch (such as
+    // an error path) reads as one lane; otherwise it takes the next free row below.
+    const columns = new Map();
+    this.nodes.forEach((n, i) => {
+      if (n.type === TYPES.sticky[0] || aiParents.has(n.name)) return;
       const d = visit(n.name);
-      const row = rows.get(d) ?? 0;
-      rows.set(d, row + 1);
-      n.position = [d * 280, row * 200];
+      columns.set(d, [...(columns.get(d) ?? []), { n, i }]);
+    });
+    const rowOf = new Map();
+    for (const d of [...columns.keys()].sort((a, b) => a - b)) {
+      const used = new Set();
+      const column = columns.get(d).map(({ n, i }) => {
+        const [parent] = incoming.get(n.name)
+          .filter((c) => c.type === 'main' && rowOf.has(c.from))
+          .sort((a, b) => rowOf.get(a.from) - rowOf.get(b.from) || a.output - b.output);
+        return { n, i, row: parent ? rowOf.get(parent.from) : 0, output: parent ? parent.output : 0 };
+      }).sort((a, b) => a.row - b.row || a.output - b.output || a.i - b.i);
+      for (const { n, row: preferred } of column) {
+        let row = preferred;
+        while (used.has(row)) row++;
+        used.add(row);
+        rowOf.set(n.name, row);
+        n.position = [d * 280 + shift(d), row * 200];
+      }
     }
     const aiCount = new Map();
     for (const n of this.nodes) {

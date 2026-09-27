@@ -149,7 +149,7 @@
       "typeVersion": 2.7,
       "position": [
         1120,
-        0
+        200
       ],
       "credentials": {
         "postgres": {
@@ -172,7 +172,7 @@
       "typeVersion": 2.7,
       "position": [
         1120,
-        200
+        0
       ],
       "credentials": {
         "postgres": {
